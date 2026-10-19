@@ -7,7 +7,7 @@ import android.content.Intent
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         Logger.event(c, "BOOT_RECEIVER", "action=${i.action}")
-        TrackService.start(c)
+        TrackService.start(c, "boot:${i.action}")
         Watchdog.schedule(c)
     }
 }

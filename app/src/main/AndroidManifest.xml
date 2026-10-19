@@ -30,6 +30,21 @@
             </intent-filter>
         </receiver>
 
+        <!-- 多触发器: 看哪个能在进程被杀后把 app 拉起来(要求 targetSdk<24 才能收到隐式广播) -->
+        <receiver android:name=".TriggerReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.net.conn.CONNECTIVITY_CHANGE"/>
+                <action android:name="android.intent.action.ACTION_POWER_CONNECTED"/>
+                <action android:name="android.intent.action.ACTION_POWER_DISCONNECTED"/>
+                <action android:name="android.intent.action.USER_PRESENT"/>
+                <action android:name="android.intent.action.TIME_SET"/>
+                <action android:name="android.intent.action.ACC_ON"/>
+                <action android:name="android.intent.action.ACC_OFF"/>
+                <action android:name="com.android.action.ACC_ON"/>
+                <action android:name="com.android.action.ACC_OFF"/>
+            </intent-filter>
+        </receiver>
+
         <receiver android:name=".WatchdogReceiver" android:exported="false"/>
 
         <service android:name=".TrackService" android:exported="false"/>

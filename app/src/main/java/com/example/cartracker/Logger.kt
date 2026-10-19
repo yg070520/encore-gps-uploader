@@ -49,6 +49,12 @@ object Logger {
         Log.i("CarTracker", "$tag $msg")
     }
 
+    /** 高德广播完整内容(不截断),单独成文件 */
+    @Synchronized
+    fun amap(ctx: Context, msg: String) {
+        raw(file(ctx, "amap.log"), "${fmt.format(Date())} $msg")
+    }
+
     @Synchronized
     fun gps(ctx: Context, line: String) {
         val f = file(ctx, "gps.csv")
@@ -61,6 +67,7 @@ object Logger {
     fun clear(ctx: Context) {
         File(dir(ctx), "events.log").delete()
         File(dir(ctx), "gps.csv").delete()
+        File(dir(ctx), "amap.log").delete()
     }
 
     fun tail(ctx: Context, name: String, maxBytes: Int = 12000): String {

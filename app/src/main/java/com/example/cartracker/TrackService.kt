@@ -14,6 +14,7 @@ import android.location.GnssStatus
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
@@ -25,6 +26,7 @@ class TrackService : Service() {
 
     companion object {
         const val CHANNEL_ID = "track"
+        const val EXTRA_REASON = "reason"
         const val USE_WAKELOCK = false   // 想测"持有 CPU 唤醒锁"的效果时改成 true
 
         @Volatile var running = false
@@ -48,7 +50,7 @@ class TrackService : Service() {
             CONNECTIVITY
         )
 
-        // 车机厂商 ACC 广播的名字是猜的,需要你自己点火/熄火后看日志,再改成真实 action
+        // 车机厂商 ACC 广播的名字是猜的,以实测为准
         val VENDOR_GUESS_ACTIONS = listOf(
             "android.intent.action.ACC_ON",
             "android.intent.action.ACC_OFF",
@@ -60,11 +62,12 @@ class TrackService : Service() {
 
         val AMAP_ACTIONS = listOf(AMAP)
 
-        fun start(c: Context) {
+        fun start(c: Context, reason: String) {
+            val i = Intent(c, TrackService::class.java).putExtra(EXTRA_REASON, reason)
             try {
-                c.startForegroundService(Intent(c, TrackService::class.java))
+                if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i) else c.startService(i)
             } catch (e: Exception) {
-                Logger.event(c, "SERVICE_START_FAIL", e.toString())
+                Logger.event(c, "SERVICE_START_FAIL", "reason=$reason $e")
             }
         }
 
@@ -81,8 +84,11 @@ class TrackService : Service() {
     private var satsUsed = 0
     private var satsTotal = 0
     private var fixesAtLastBeat = 0L
-    private var lastAmapLog = 0L
+    private var amapCount = 0L
+    private var amapAtLastBeat = 0L
     private var amapSuppressed = 0
+    private val amapLast = HashMap<String, Long>()
+    private var lastSleepMs = 0L
 
     private val locListener = object : LocationListener {
         override fun onLocationChanged(l: Location) {
@@ -115,41 +121,52 @@ class TrackService : Service() {
         override fun onReceive(c: Context, i: Intent) {
             val action = i.action ?: return
             if (action == AMAP) {
-                // 高德广播可能很频繁,最多每 5 秒记一条
+                amapCount++
+                // 按 KEY_TYPE 分别限流(每类最多每 5 秒一条),完整内容写 amap.log
+                val type = i.extras?.get("KEY_TYPE")?.toString() ?: "?"
                 val now = SystemClock.elapsedRealtime()
-                if (now - lastAmapLog < 5000) {
+                if (now - (amapLast[type] ?: 0L) < 5000) {
                     amapSuppressed++
                     return
                 }
-                lastAmapLog = now
-                Logger.event(c, "AMAP", "suppressed=$amapSuppressed ${dump(i)}")
+                amapLast[type] = now
+                Logger.amap(c, "type=$type suppressed=$amapSuppressed ${dump(i, 20000)}")
                 amapSuppressed = 0
                 return
             }
-            Logger.event(c, "BCAST", "$action ${dump(i)}")
+            // CONNECTIVITY_CHANGE 是 sticky 广播: 刚注册时会立刻收到一条"当前状态",并不代表网络真的变了
+            Logger.event(c, "BCAST", "$action ${dump(i, 300)}")
             if (action != CONNECTIVITY) {
-                // 唤醒类事件: 重新挂定位监听,并重置看门狗
                 ensureLocation("wake:$action")
                 Watchdog.schedule(c)
             }
         }
     }
 
-    private fun dump(i: Intent): String {
+    private fun dump(i: Intent, max: Int): String {
         val b = i.extras ?: return ""
-        return b.keySet().joinToString(", ") { k -> "$k=${b.get(k)}" }.take(800)
+        return b.keySet().joinToString(", ") { k -> "$k=${b.get(k)}" }.take(max)
     }
 
     private val beat = object : Runnable {
         override fun run() {
-            val ago = if (lastFixElapsedMs == 0L) -1L
-            else (SystemClock.elapsedRealtime() - lastFixElapsedMs) / 1000
+            val el = SystemClock.elapsedRealtime()
+            val ago = if (lastFixElapsedMs == 0L) -1L else (el - lastFixElapsedMs) / 1000
             val delta = fixCount - fixesAtLastBeat
             fixesAtLastBeat = fixCount
+            val amapDelta = amapCount - amapAtLastBeat
+            amapAtLastBeat = amapCount
             Logger.event(
                 this@TrackService, "HEARTBEAT",
-                "fixes_last_min=$delta total=$fixCount lastFixAgo=${ago}s sats=$satsUsed/$satsTotal listening=$listening"
+                "fixes_last_min=$delta total=$fixCount lastFixAgo=${ago}s sats=$satsUsed/$satsTotal " +
+                    "amap_msgs=$amapDelta listening=$listening"
             )
+            // 休眠检测: elapsedRealtime 含休眠、uptimeMillis 不含,二者之差的增量 = 两次心跳之间睡了多久
+            val sleepNow = el - SystemClock.uptimeMillis()
+            if (sleepNow - lastSleepMs > 5000) {
+                Logger.event(this@TrackService, "SLEPT", "${(sleepNow - lastSleepMs) / 1000}s since last beat")
+            }
+            lastSleepMs = sleepNow
             if (listening && (ago < 0 || ago > 60)) ensureLocation("stale")
             handler.postDelayed(this, 60_000)
         }
@@ -159,6 +176,7 @@ class TrackService : Service() {
         super.onCreate()
         running = true
         lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        lastSleepMs = SystemClock.elapsedRealtime() - SystemClock.uptimeMillis()
         goForeground()
         Logger.event(this, "SERVICE_CREATE", "")
 
@@ -177,24 +195,31 @@ class TrackService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         goForeground()
-        Logger.event(
-            this, "SERVICE_START",
-            "intent=${if (intent == null) "null(system restart)" else "ok"} flags=$flags startId=$startId"
-        )
+        val reason = when {
+            intent == null -> "STICKY-RESTART(null intent)"
+            else -> intent.getStringExtra(EXTRA_REASON) ?: "unknown"
+        }
+        Logger.event(this, "SERVICE_START", "reason=$reason flags=$flags startId=$startId")
         if (!listening) ensureLocation("onStartCommand")
         Watchdog.schedule(this)
         return START_STICKY
     }
 
     private fun goForeground() {
-        val nm = getSystemService(NotificationManager::class.java)
-        if (nm.getNotificationChannel(CHANNEL_ID) == null) {
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Tracking", NotificationManager.IMPORTANCE_LOW)
-            )
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val b: Notification.Builder
+        if (Build.VERSION.SDK_INT >= 26) {
+            if (nm.getNotificationChannel(CHANNEL_ID) == null) {
+                nm.createNotificationChannel(
+                    NotificationChannel(CHANNEL_ID, "Tracking", NotificationManager.IMPORTANCE_LOW)
+                )
+            }
+            b = Notification.Builder(this, CHANNEL_ID)
+        } else {
+            @Suppress("DEPRECATION")
+            b = Notification.Builder(this)
         }
-        val n = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("CarTracker")
+        val n = b.setContentTitle("CarTracker")
             .setContentText("GPS logging")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setOngoing(true)
@@ -202,8 +227,11 @@ class TrackService : Service() {
         startForeground(1, n)
     }
 
+    private fun hasLocPerm() =
+        checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
     private fun ensureLocation(reason: String) {
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        if (!hasLocPerm()) {
             Logger.event(this, "GPS", "no ACCESS_FINE_LOCATION permission ($reason)")
             return
         }
@@ -215,13 +243,14 @@ class TrackService : Service() {
                 this, "GPS",
                 "requestLocationUpdates ($reason) gpsEnabled=${lm.isProviderEnabled(LocationManager.GPS_PROVIDER)}"
             )
+            registerGnss()   // v1 的 bug: 授权晚于服务创建时,GNSS 回调从未注册。这里补上
         } catch (e: Exception) {
             Logger.event(this, "GPS", "request failed ($reason): $e")
         }
     }
 
     private fun registerGnss() {
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
+        if (gnssCb != null || Build.VERSION.SDK_INT < 24 || !hasLocPerm()) return
         try {
             val cb = object : GnssStatus.Callback() {
                 override fun onSatelliteStatusChanged(status: GnssStatus) {
@@ -249,7 +278,10 @@ class TrackService : Service() {
         listening = false
         handler.removeCallbacksAndMessages(null)
         try { lm.removeUpdates(locListener) } catch (_: Exception) {}
-        try { gnssCb?.let { lm.unregisterGnssStatusCallback(it) } } catch (_: Exception) {}
+        if (Build.VERSION.SDK_INT >= 24) {
+            try { gnssCb?.let { lm.unregisterGnssStatusCallback(it) } } catch (_: Exception) {}
+        }
+        gnssCb = null
         try { unregisterReceiver(dynReceiver) } catch (_: Exception) {}
         wakeLock?.let { if (it.isHeld) it.release() }
         super.onDestroy()

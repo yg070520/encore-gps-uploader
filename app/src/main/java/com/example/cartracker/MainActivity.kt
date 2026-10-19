@@ -44,7 +44,7 @@ class MainActivity : Activity() {
 
         val lp = { LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) }
         row.addView(btn("启动服务") {
-            TrackService.start(this)
+            TrackService.start(this, "button")
             Watchdog.schedule(this)
         }, lp())
         row.addView(btn("停止服务") {
@@ -66,7 +66,7 @@ class MainActivity : Activity() {
         setContentView(root)
 
         requestLocationPermission()
-        TrackService.start(this)
+        TrackService.start(this, "activity")
         Watchdog.schedule(this)
     }
 
@@ -94,7 +94,7 @@ class MainActivity : Activity() {
     override fun onRequestPermissionsResult(code: Int, perms: Array<out String>, res: IntArray) {
         super.onRequestPermissionsResult(code, perms, res)
         Logger.event(this, "PERMISSION", "location granted=${hasLocPerm()}")
-        TrackService.start(this)   // 触发 onStartCommand,重新挂定位监听
+        TrackService.start(this, "permission")   // 触发 onStartCommand,重新挂定位监听
     }
 
     private fun requestBatteryWhitelist() {

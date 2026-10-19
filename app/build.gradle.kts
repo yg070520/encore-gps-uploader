@@ -9,10 +9,10 @@ android {
 
     defaultConfig {
         applicationId = "com.example.cartracker"
-        minSdk = 26
-        targetSdk = 28   // 对齐车机 Android 9,避开新版本的后台限制
-        versionCode = 1
-        versionName = "0.1"
+        minSdk = 23
+        targetSdk = 23   // 实验: <24 才能在 Manifest 里静态收 CONNECTIVITY_CHANGE 等隐式广播; <26 不受后台服务限制
+        versionCode = 2
+        versionName = "0.2"
     }
 
     compileOptions {
