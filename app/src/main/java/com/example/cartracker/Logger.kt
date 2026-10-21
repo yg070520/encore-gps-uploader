@@ -62,6 +62,27 @@ object Logger {
             raw(f, "sys_ms,fix_ms,lat,lon,speed_mps,bearing,alt,acc_m,mock,dt_ms,sats_used/total")
         }
         raw(f, line)
+        sendUdp(line)
+    }
+
+    private val udpExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    private fun sendUdp(line: String) {
+        udpExec.execute {
+            try {
+                val data = line.toByteArray(Charsets.UTF_8)
+                java.net.MulticastSocket().use { s ->
+                    s.timeToLive = 4
+                    s.send(
+                        java.net.DatagramPacket(
+                            data, data.size,
+                            java.net.InetAddress.getByName("239.0.0.1"), 5007
+                        )
+                    )
+                }
+            } catch (_: Exception) {
+            }
+        }
     }
 
     fun clear(ctx: Context) {
