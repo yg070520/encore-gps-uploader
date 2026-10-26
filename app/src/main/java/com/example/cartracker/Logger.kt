@@ -62,25 +62,41 @@ object Logger {
             raw(f, "sys_ms,fix_ms,lat,lon,speed_mps,bearing,alt,acc_m,mock,dt_ms,sats_used/total")
         }
         raw(f, line)
+        appCtx = ctx.applicationContext
         sendUdp(line)
     }
 
     private val udpExec = java.util.concurrent.Executors.newSingleThreadExecutor()
 
+    @Volatile
+    private var appCtx: Context? = null
+
+    private fun wifiNetwork(ctx: Context): android.net.Network? {
+        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        @Suppress("DEPRECATION")
+        return cm.allNetworks.firstOrNull { n ->
+            cm.getNetworkCapabilities(n)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
+        }
+    }
+
     private fun sendUdp(line: String) {
+        val ctx = appCtx ?: return
         udpExec.execute {
             try {
                 val data = line.toByteArray(Charsets.UTF_8)
                 java.net.MulticastSocket().use { s ->
-                    s.timeToLive = 4
+                    s.timeToLive = 1
+                    // 绑定 Wi-Fi,避免组播走蜂窝等默认网络;找不到 Wi-Fi 时用默认路由
+                    wifiNetwork(ctx)?.bindSocket(s)
                     s.send(
                         java.net.DatagramPacket(
                             data, data.size,
-                            java.net.InetAddress.getByName("239.0.0.1"), 5007
+                            java.net.InetAddress.getByName("239.1.1.1"), 5007
                         )
                     )
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.w("CarTracker", "udp send failed: $e")
             }
         }
     }
