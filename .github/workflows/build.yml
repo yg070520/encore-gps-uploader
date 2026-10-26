@@ -17,7 +17,38 @@ jobs:
           gradle-version: 8.5
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
+      - name: Sign APK with V1 and V2 schemes
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"
+          BUILD_TOOLS="$(find "$SDK_ROOT/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          APKSIGNER="$BUILD_TOOLS/apksigner"
+          INPUT_APK="$(find app/build/outputs/apk/debug -name '*.apk' ! -name '*-v1v2.apk' | head -1)"
+
+          keytool -genkeypair \
+            -keystore debug-v1v2.keystore \
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 36500 \
+            -startdate "2020/01/01 00:00:00" \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+          "$APKSIGNER" sign \
+            --ks debug-v1v2.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --ks-key-alias androiddebugkey \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled false \
+            --out app/build/outputs/apk/debug/app-debug-v1v2.apk \
+            "$INPUT_APK"
+
+          "$APKSIGNER" verify --verbose --print-certs \
+            app/build/outputs/apk/debug/app-debug-v1v2.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: CarTracker-debug
-          path: app/build/outputs/apk/debug/*.apk
+          name: CarTracker-debug-v1v2
+          path: app/build/outputs/apk/debug/app-debug-v1v2.apk
