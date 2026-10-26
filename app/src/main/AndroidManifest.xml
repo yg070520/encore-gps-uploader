@@ -49,5 +49,7 @@
         <receiver android:name=".WatchdogReceiver" android:exported="false"/>
 
         <service android:name=".TrackService" android:exported="false"/>
+        <!-- NaviShell uses an explicit component to start tracking without opening the UI. -->
+        <service android:name=".TrackerService" android:exported="true"/>
     </application>
 </manifest>
